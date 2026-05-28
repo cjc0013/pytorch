@@ -7179,6 +7179,30 @@ class ShapeEnv:
             return expr
 
     @_lru_cache
+    def replace_backed_only(self, expr: _SympyT) -> _SympyT:
+        """Apply symbol replacements only to backed symbols, preserving unbacked ones.
+
+        Unlike replace(), this skips unbacked symbols (UNBACKED_INT,
+        UNBACKED_FLOAT) so that runtime assertions on data-dependent values
+        are preserved.
+        """
+        from torch.utils._sympy.symbol import symbol_is_type, SymT
+
+        replacements: dict[sympy.Basic, sympy.Basic] = {}
+        # pyrefly: ignore [missing-attribute]
+        for s in expr.free_symbols:
+            if symbol_is_type(s, (SymT.UNBACKED_INT, SymT.UNBACKED_FLOAT)):
+                continue
+            r = self._find(s)
+            if not r.is_Symbol or r != s:
+                replacements[s] = r
+        if replacements:
+            # pyrefly: ignore [missing-attribute]
+            return safe_expand(expr.xreplace(replacements))
+        else:
+            return expr
+
+    @_lru_cache
     def _update_divisible(self) -> None:
         new_divisible = set()
         for k in self.divisible:

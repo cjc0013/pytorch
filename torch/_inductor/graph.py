@@ -2219,6 +2219,7 @@ class GraphLowering(torch.fx.Interpreter):
     def create_deferred_runtime_asserts(
         self, n: torch.fx.Node, new_unbacked_defs: OrderedSet[sympy.Symbol]
     ) -> None:
+        """Emit runtime assertions for unbacked SymInt range and equality constraints."""
         if config.do_not_emit_runtime_assertions:
             return
         # [NOTE] Codegen runtime asserts in Inductor
@@ -2301,7 +2302,10 @@ class GraphLowering(torch.fx.Interpreter):
                         i1 = min(missing, key=str)
                         self.ras_by_symbol.setdefault(i1, []).append(ra)
                     else:
-                        make_assert(ra.expr, f"{ra.expr}")
+                        expr = shape_env.replace_backed_only(ra.expr)
+                        if expr is sympy.true:
+                            continue
+                        make_assert(expr, f"{expr}")
 
     def validate_can_generate_cpp_wrapper(self) -> None:
         if config.disable_cpp_codegen:

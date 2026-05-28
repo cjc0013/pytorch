@@ -369,7 +369,12 @@ class Match:
 
                     def _convert_to_fake_mode(it):
                         if isinstance(it, FakeTensor) and fake_mode is not None:
-                            return fake_mode.from_tensor(it)
+                            try:
+                                return fake_mode.from_tensor(it)
+                            except torch.fx.experimental.symbolic_shapes.GuardOnDataDependentSymNode:
+                                # FakeTensors with unbacked SymInts (e.g. from nonzero())
+                                # can't be converted between fake modes; keep the original.
+                                return it
                         return it
 
                     example_vals = torch.fx.node.map_aggregate(
