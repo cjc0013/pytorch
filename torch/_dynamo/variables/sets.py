@@ -43,7 +43,10 @@ from .hashable import HashableTracker, is_hashable
 
 if TYPE_CHECKING:
     from torch._dynamo.codegen import PyCodegen
-    from torch._dynamo.symbolic_convert import InstructionTranslator
+    from torch._dynamo.symbolic_convert import (
+        InstructionTranslator,
+        InstructionTranslatorBase,
+    )
     from torch._dynamo.variables.builtin import BuiltinVariable
 
 
@@ -169,7 +172,9 @@ class SetVariable(VariableTracker):
             return id(value.realize()) != id(other.realize())
         return id(value) != id(other)
 
-    def unpack_var_sequence(self, tx: "InstructionTranslator") -> list[VariableTracker]:
+    def unpack_var_sequence(
+        self, tx: "InstructionTranslatorBase"
+    ) -> list[VariableTracker]:
         return [x.vt for x in self.items]
 
     def clone(self, **kwargs: Any) -> VariableTracker:
