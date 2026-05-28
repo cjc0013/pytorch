@@ -290,6 +290,7 @@ class CppWrapperCpu(PythonWrapperCodegen):
         self.initialized_kernels: dict[str, Kernel] = {}
         self.device_codegen = get_device_op_overrides(self.device)
         self._included_extra_headers: OrderedSet[str] = OrderedSet()
+        self._included_fbcode_python_arg_helpers = False
         self.codegen_int_array_var_cache = {}
         self.needs_vec_isa = self.device == "cpu"
 
@@ -526,6 +527,88 @@ class CppWrapperCpu(PythonWrapperCodegen):
             return
         self._included_extra_headers.add(header)
         self.header.splice(f"#include <{header}>")
+
+    def include_fbcode_python_arg_helpers(self):
+        if self._included_fbcode_python_arg_helpers:
+            return
+        self._included_fbcode_python_arg_helpers = True
+        self.header.splice(
+            """
+            #include <stdexcept>
+
+            namespace torch::aot_inductor {
+            static PyObject* (*_torchinductor_thp_device_new)(int, int) = nullptr;
+            static PyObject* (*_torchinductor_get_thp_dtype)(int) = nullptr;
+            static PyObject* (*_torchinductor_get_thp_layout)(int) = nullptr;
+            static PyObject* (*_torchinductor_get_thp_memory_format)(int) = nullptr;
+
+            inline void* torchinductor_fb_get_pointer_attr(
+                PyObject* module,
+                const char* attr) {
+                RAIIPyObject value(PyObject_GetAttrString(module, attr));
+                if (!value) {
+                    throw std::runtime_error("failed to load torch._C._dynamo.guards function pointer");
+                }
+                void* ptr = PyLong_AsVoidPtr(value.get());
+                if (!ptr || PyErr_Occurred()) {
+                    throw std::runtime_error("failed to parse torch._C._dynamo.guards function pointer");
+                }
+                return ptr;
+            }
+
+            inline void torchinductor_fb_init_python_arg_helpers() {
+                if (_torchinductor_thp_device_new != nullptr) {
+                    return;
+                }
+
+                RAIIPyObject guards_mod(PyImport_ImportModule("torch._C._dynamo.guards"));
+                if (!guards_mod) {
+                    throw std::runtime_error("failed to import torch._C._dynamo.guards");
+                }
+
+                _torchinductor_thp_device_new =
+                    reinterpret_cast<decltype(_torchinductor_thp_device_new)>(
+                        torchinductor_fb_get_pointer_attr(
+                            guards_mod.get(), "_torchinductor_thp_device_new"));
+                _torchinductor_get_thp_dtype =
+                    reinterpret_cast<decltype(_torchinductor_get_thp_dtype)>(
+                        torchinductor_fb_get_pointer_attr(
+                            guards_mod.get(), "_torchinductor_get_thp_dtype"));
+                _torchinductor_get_thp_layout =
+                    reinterpret_cast<decltype(_torchinductor_get_thp_layout)>(
+                        torchinductor_fb_get_pointer_attr(
+                            guards_mod.get(), "_torchinductor_get_thp_layout"));
+                _torchinductor_get_thp_memory_format =
+                    reinterpret_cast<decltype(_torchinductor_get_thp_memory_format)>(
+                        torchinductor_fb_get_pointer_attr(
+                            guards_mod.get(), "_torchinductor_get_thp_memory_format"));
+            }
+
+            inline PyObject* torchinductor_fb_thp_device_new(
+                int device_type,
+                int device_index) {
+                torchinductor_fb_init_python_arg_helpers();
+                return _torchinductor_thp_device_new(device_type, device_index);
+            }
+
+            inline PyObject* torchinductor_fb_get_thp_dtype(int dtype) {
+                torchinductor_fb_init_python_arg_helpers();
+                return _torchinductor_get_thp_dtype(dtype);
+            }
+
+            inline PyObject* torchinductor_fb_get_thp_layout(int layout) {
+                torchinductor_fb_init_python_arg_helpers();
+                return _torchinductor_get_thp_layout(layout);
+            }
+
+            inline PyObject* torchinductor_fb_get_thp_memory_format(
+                int memory_format) {
+                torchinductor_fb_init_python_arg_helpers();
+                return _torchinductor_get_thp_memory_format(memory_format);
+            }
+            } // namespace torch::aot_inductor
+            """
+        )
 
     def mark_output_type(self):
         # mark output type to unwrap tensor back to python scalar
@@ -3028,16 +3111,35 @@ if (!custom_op_wrapper) {
                 # torch/_prims_common/__init__.py
                 return handle_scalar(raw_arg)
             elif isinstance(raw_arg, torch.device):
-                self.include_extra_header("torch/csrc/Device.h")
                 device_str, device_index = self.codegen_device(raw_arg).split(", ")
+                if config.is_fbcode():
+                    self.include_fbcode_python_arg_helpers()
+                    return (
+                        f"torchinductor_fb_thp_device_new({device_str}, {device_index})"
+                    )
+                self.include_extra_header("torch/csrc/Device.h")
                 return f"THPDevice_New(c10::Device(static_cast<c10::DeviceType>({device_str}), {device_index}))"
             elif isinstance(raw_arg, torch.dtype):
+                if config.is_fbcode():
+                    self.include_fbcode_python_arg_helpers()
+                    return (
+                        f"torchinductor_fb_get_thp_dtype({self.codegen_dtype(raw_arg)})"
+                    )
                 self.include_extra_header("torch/csrc/DynamicTypes.h")
                 return f"Py_NewRef(torch::getTHPDtype(static_cast<c10::ScalarType>({self.codegen_dtype(raw_arg)})))"
             elif isinstance(raw_arg, torch.layout):
+                if config.is_fbcode():
+                    self.include_fbcode_python_arg_helpers()
+                    return f"torchinductor_fb_get_thp_layout({self.codegen_layout(raw_arg)})"
                 self.include_extra_header("torch/csrc/DynamicTypes.h")
                 return f"Py_NewRef(torch::getTHPLayout(static_cast<c10::Layout>({self.codegen_layout(raw_arg)})))"
             elif isinstance(raw_arg, torch.memory_format):
+                if config.is_fbcode():
+                    self.include_fbcode_python_arg_helpers()
+                    return (
+                        "torchinductor_fb_get_thp_memory_format("
+                        f"{self.codegen_memory_format(raw_arg)})"
+                    )
                 self.include_extra_header("torch/csrc/utils/tensor_memoryformats.h")
                 return (
                     "Py_NewRef(torch::utils::getTHPMemoryFormat(static_cast<c10::MemoryFormat>("

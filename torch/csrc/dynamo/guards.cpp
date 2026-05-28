@@ -9,6 +9,8 @@
 #include <c10/util/Synchronized.h>
 #include <c10/util/flat_hash_map.h>
 #include <fmt/format.h>
+#include <torch/csrc/Device.h>
+#include <torch/csrc/DynamicTypes.h>
 #include <torch/csrc/autograd/grad_mode.h>
 #include <torch/csrc/autograd/utils/wrap_outputs.h>
 #include <torch/csrc/dynamo/guards.h>
@@ -20,6 +22,7 @@
 #include <torch/csrc/utils/python_strings.h>
 #include <torch/csrc/utils/python_symnode.h>
 #include <torch/csrc/utils/pythoncapi_compat.h>
+#include <torch/csrc/utils/tensor_memoryformats.h>
 #include <torch/extension.h>
 #include <cstdint>
 
@@ -7269,6 +7272,26 @@ static void* _torchinductor_pyobject_tensor_data_ptr(PyObject* obj) {
   return THPVariable_Unpack(obj).data_ptr();
 }
 
+static PyObject* _torchinductor_thp_device_new(
+    int device_type,
+    int device_index) {
+  return THPDevice_New(
+      c10::Device(static_cast<c10::DeviceType>(device_type), device_index));
+}
+
+static PyObject* _torchinductor_get_thp_dtype(int dtype) {
+  return Py_NewRef(torch::getTHPDtype(static_cast<c10::ScalarType>(dtype)));
+}
+
+static PyObject* _torchinductor_get_thp_layout(int layout) {
+  return Py_NewRef(torch::getTHPLayout(static_cast<c10::Layout>(layout)));
+}
+
+static PyObject* _torchinductor_get_thp_memory_format(int memory_format) {
+  return Py_NewRef(torch::utils::getTHPMemoryFormat(
+      static_cast<c10::MemoryFormat>(memory_format)));
+}
+
 void* convert_to_root_guard_manager(py::object root) {
   // For invalidated guards, return nullptr
   if (root.is(py::none())) {
@@ -7353,6 +7376,53 @@ PyObject* torch_c_dynamo_guards_init() {
           PyLong_FromVoidPtr(reinterpret_cast<void*>(
               &_torchinductor_pyobject_tensor_data_ptr))) < 0) {
     return nullptr;
+  }
+
+  // Expose cpp_wrapper Python arg helpers for fbcode.  The generated JIT .so
+  // resolves these dynamically because libtorch_python symbols are not exported
+  // from the fbcode executable's dynamic symbol table.
+  {
+    using DeviceFn = PyObject* (*)(int, int);
+    DeviceFn fn = &_torchinductor_thp_device_new;
+    if (PyModule_AddObject(
+            m,
+            "_torchinductor_thp_device_new",
+            PyLong_FromVoidPtr(reinterpret_cast<void*>(fn))) < 0) {
+      return nullptr;
+    }
+  }
+
+  {
+    using DtypeFn = PyObject* (*)(int);
+    DtypeFn fn = &_torchinductor_get_thp_dtype;
+    if (PyModule_AddObject(
+            m,
+            "_torchinductor_get_thp_dtype",
+            PyLong_FromVoidPtr(reinterpret_cast<void*>(fn))) < 0) {
+      return nullptr;
+    }
+  }
+
+  {
+    using LayoutFn = PyObject* (*)(int);
+    LayoutFn fn = &_torchinductor_get_thp_layout;
+    if (PyModule_AddObject(
+            m,
+            "_torchinductor_get_thp_layout",
+            PyLong_FromVoidPtr(reinterpret_cast<void*>(fn))) < 0) {
+      return nullptr;
+    }
+  }
+
+  {
+    using MemoryFormatFn = PyObject* (*)(int);
+    MemoryFormatFn fn = &_torchinductor_get_thp_memory_format;
+    if (PyModule_AddObject(
+            m,
+            "_torchinductor_get_thp_memory_format",
+            PyLong_FromVoidPtr(reinterpret_cast<void*>(fn))) < 0) {
+      return nullptr;
+    }
   }
 
   // Expose THPVariable_Wrap for cpp_wrapper inductor, for fbcode
