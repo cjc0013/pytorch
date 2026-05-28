@@ -1604,7 +1604,10 @@ class BuiltinVariable(BaseBuiltinVariable):
                         f"object.__new__ expects no kwargs, got {len(kwargs)}"
                     )
                 return tx.output.side_effects.track_new_user_defined_object(
-                    self, args[0], args[1:]
+                    self,
+                    args[0],
+                    args[1:],
+                    tx=tx,
                 )
 
             if (
@@ -1623,6 +1626,7 @@ class BuiltinVariable(BaseBuiltinVariable):
                     self,
                     args[0],
                     args[1:],
+                    tx=tx,
                 )
 
         if name in _BUILTIN_CONSTANT_FOLDABLE_METHODS.get(self.fn, ()):
@@ -2939,7 +2943,10 @@ class DictBuiltinVariable(BaseBuiltinVariable):
                 if isinstance(args[0], DictBuiltinVariable):
                     return dict_vt
                 return tx.output.side_effects.track_new_user_defined_object(
-                    self, args[0], []
+                    self,
+                    args[0],
+                    [],
+                    tx=tx,
                 )
 
         if name == "fromkeys":
@@ -3038,6 +3045,7 @@ class DictBuiltinVariable(BaseBuiltinVariable):
                     SourcelessBuilder.create(tx, dict),
                     SourcelessBuilder.create(tx, OrderedDict),
                     [],
+                    tx=tx,
                 )
                 if not isinstance(result, OrderedDictVariable):
                     raise AssertionError(
@@ -3057,6 +3065,7 @@ class DictBuiltinVariable(BaseBuiltinVariable):
                     SourcelessBuilder.create(tx, dict),
                     SourcelessBuilder.create(tx, defaultdict),
                     [],
+                    tx=tx,
                 )
                 if not isinstance(result, DefaultDictVariable):
                     raise AssertionError(
@@ -3677,7 +3686,10 @@ class ListBuiltinVariable(BaseBuiltinVariable):
                 if isinstance(args[0], ListBuiltinVariable):
                     return list_vt
                 return tx.output.side_effects.track_new_user_defined_object(
-                    self, args[0], args[1:]
+                    self,
+                    args[0],
+                    args[1:],
+                    tx=tx,
                 )
 
         return super().call_method(tx, name, args, kwargs)
